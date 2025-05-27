@@ -93,39 +93,152 @@ model_name = "gpt2"  # or any other transformer model
 model = AutoModel.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-# 2. Initialize ChunkedDecomp
-compressor = ChunkedDecomp(
-    compression_ratio=0.5,  # 50% compression
-    chunk_size=64,          # Process in chunks of 64
-    adaptive_rank=True      # Use adaptive rank selection
+# 2. Initialize ChunkedDecomp with different strategies
+
+# Option A: Uniform Strategy (Default) - Same compression for all chunks
+compressor_uniform = ChunkedDecomp(
+    model_name_or_path=model_name,
+    compression_strategy="uniform",
+    base_compression_ratio=0.5,  # 50% compression for all chunks
+    chunk_size=64
 )
 
-# 3. Apply compression to model
-compressed_model = compressor.compress_model(model)
+# Option B: Progressive Strategy - Early chunks less compressed
+compressor_progressive = ChunkedDecomp(
+    model_name_or_path=model_name,
+    compression_strategy="progressive",
+    base_compression_ratio=0.5,  # Average compression
+    start_ratio=0.8,              # Early chunks: 80% rank (less compression)
+    end_ratio=0.2,                # Later chunks: 20% rank (more compression)
+    chunk_size=64
+)
 
-# 4. Track memory usage
+# Option C: Adaptive Strategy - Data-driven rank selection
+compressor_adaptive = ChunkedDecomp(
+    model_name_or_path=model_name,
+    compression_strategy="adaptive",
+    base_compression_ratio=0.5,
+    chunk_size=64
+)
+
+# Option D: Custom Manual Ranks - Full control
+custom_rank_map = {0: 48, 1: 32, 2: 24, 3: 16}  # Decreasing ranks
+compressor_custom = ChunkedDecomp(
+    model_name_or_path=model_name,
+    decomp_rank_map=custom_rank_map,
+    chunk_size=64
+)
+
+# 3. Use any compressor (example with progressive)
+compressor = compressor_progressive
+
+# 4. Track memory usage during inference
 with MemoryTracker() as tracker:
-    # Use compressed model for inference
+    # Forward pass with compression
     inputs = tokenizer("Hello world", return_tensors="pt")
-    outputs = compressed_model(**inputs)
+    result = compressor.forward_with_compression(inputs['input_ids'])
+    outputs = result['model_outputs']
 
 print(f"Peak memory usage: {tracker.get_peak_memory():.2f} MB")
+print(f"Compression ratio achieved: {result['compression_stats']['effective_compression_ratio']:.3f}")
+print(f"Rank map used: {compressor.decomp_rank_map}")
 ```
 
 ### Configuration-Based Usage
 
-Create a configuration file or use existing ones:
+Create a configuration file or use existing ones to define different compression strategies:
 
 ```python
 import yaml
 from src import ChunkedDecomp
 
-# Load configuration
+# Load configuration with multiple strategies
 with open('configs/compression_configs.yaml', 'r') as f:
     config = yaml.safe_load(f)
 
-# Use aggressive compression settings
-compressor = ChunkedDecomp(**config['aggressive'])
+# Conservative strategy - prioritizes quality
+compressor_conservative = ChunkedDecomp(**config['conservative'])
+# Example config: uniform strategy, compression_ratio=0.7
+
+# Balanced strategy - good quality/compression trade-off  
+compressor_balanced = ChunkedDecomp(**config['balanced'])
+# Example config: progressive strategy, start_ratio=0.8, end_ratio=0.3
+
+# Aggressive strategy - maximum compression
+compressor_aggressive = ChunkedDecomp(**config['aggressive'])
+# Example config: uniform strategy, compression_ratio=0.3
+
+# Or define strategies programmatically:
+strategies = {
+    'uniform_50': {
+        'compression_strategy': 'uniform',
+        'base_compression_ratio': 0.5,
+        'chunk_size': 64
+    },
+    'progressive_balanced': {
+        'compression_strategy': 'progressive', 
+        'base_compression_ratio': 0.5,
+        'start_ratio': 0.8,
+        'end_ratio': 0.2,
+        'chunk_size': 64
+    },
+    'adaptive_smart': {
+        'compression_strategy': 'adaptive',
+        'base_compression_ratio': 0.5,
+        'chunk_size': 64
+    }
+}
+
+# Use any strategy
+compressor = ChunkedDecomp(
+    model_name_or_path="gpt2",
+    **strategies['progressive_balanced']
+)
+```
+
+### Understanding Compression Strategies
+
+ChunkedDecomp offers four main approaches to rank selection:
+
+#### 1. **Uniform Strategy** (Default)
+- **What it does**: Uses the same compression rank for all chunks
+- **When to use**: Simple compression needs, predictable memory usage
+- **Rank calculation**: `rank = chunk_size × compression_ratio`
+- **Example**: compression_ratio=0.5, chunk_size=64 → all chunks get rank=32
+
+#### 2. **Progressive Strategy** 
+- **What it does**: Higher ranks for early chunks, lower ranks for later chunks
+- **When to use**: When early tokens are more important (common in transformers)
+- **Rank calculation**: Linear interpolation from `start_ratio` to `end_ratio`
+- **Example**: start_ratio=0.8, end_ratio=0.2, chunk_size=64
+  - Chunk 0: rank=51 (80% of 64)
+  - Chunk 1: rank=38 (60% of 64) 
+  - Chunk 2: rank=25 (40% of 64)
+  - Chunk 3: rank=13 (20% of 64)
+
+#### 3. **Adaptive Strategy**
+- **What it does**: Analyzes actual data to determine optimal ranks per chunk
+- **When to use**: Maximum quality preservation, willing to spend calibration time
+- **Rank calculation**: Based on SVD energy analysis of representative data
+- **Example**: Might assign ranks like [45, 38, 28, 22] based on data importance
+
+#### 4. **Custom Manual Strategy**
+- **What it does**: You specify exact rank for each chunk
+- **When to use**: Expert tuning, specific domain knowledge
+- **Rank calculation**: User-provided mapping
+- **Example**: `{0: 48, 1: 32, 2: 24, 3: 16}` for decreasing importance
+
+```python
+# Quick comparison of strategies
+strategies_demo = {
+    'uniform': ChunkedDecomp("gpt2", compression_strategy="uniform", base_compression_ratio=0.5),
+    'progressive': ChunkedDecomp("gpt2", compression_strategy="progressive", start_ratio=0.8, end_ratio=0.2),
+    'adaptive': ChunkedDecomp("gpt2", compression_strategy="adaptive", base_compression_ratio=0.5),
+    'custom': ChunkedDecomp("gpt2", decomp_rank_map={0: 48, 1: 32, 2: 24, 3: 16})
+}
+
+for name, compressor in strategies_demo.items():
+    print(f"{name}: {compressor.decomp_rank_map}")
 ```
 
 ## 🔧 Running Different Scripts
@@ -134,24 +247,64 @@ compressor = ChunkedDecomp(**config['aggressive'])
 
 **What it does**: Compresses models and analyzes performance vs memory trade-offs
 
+#### Basic Compression Strategies
+
 ```bash
-# Basic compression run
+# Uniform Strategy (Default) - Same rank for all chunks
 python scripts/run_compression.py \
     --model_name gpt2 \
     --compression_ratio 0.5 \
-    --output_dir results/
+    --strategy uniform \
+    --output_dir results/uniform/
 
-# Advanced compression with multiple ratios
+# Progressive Strategy - Higher ranks for early chunks, lower for later chunks
+python scripts/run_compression.py \
+    --model_name gpt2 \
+    --compression_ratio 0.5 \
+    --strategy progressive \
+    --start_ratio 0.8 \
+    --end_ratio 0.2 \
+    --output_dir results/progressive/
+
+# Adaptive Strategy - Data-driven rank selection
+python scripts/run_compression.py \
+    --model_name gpt2 \
+    --compression_ratio 0.5 \
+    --strategy adaptive \
+    --dataset_name wikitext \
+    --calibration_samples 500 \
+    --output_dir results/adaptive/
+```
+
+#### Comprehensive Strategy Comparison
+
+```bash
+# Compare all strategies with multiple compression ratios
 python scripts/run_compression.py \
     --model_name microsoft/DialoGPT-medium \
     --compression_ratio 0.3 0.5 0.7 \
+    --strategy uniform progressive adaptive \
     --chunk_size 32 64 128 \
     --dataset_name wikitext \
     --num_samples 1000 \
-    --output_dir results/compression_analysis/
+    --comparison_study \
+    --output_dir results/strategy_comparison/
+
+# Custom rank mapping example
+python scripts/run_compression.py \
+    --model_name gpt2 \
+    --custom_ranks "0:48,1:32,2:24,3:16" \
+    --dataset_name wikitext \
+    --output_dir results/custom_ranks/
 ```
 
-**Output**: Compression statistics, performance metrics, memory usage plots
+**Strategy Explanations**:
+- **Uniform**: `rank = chunk_size × compression_ratio` for all chunks
+- **Progressive**: Early chunks get `start_ratio`, later chunks get `end_ratio`
+- **Adaptive**: Analyzes data importance to determine optimal ranks per chunk
+- **Custom**: Manually specify exact rank for each chunk
+
+**Output**: Compression statistics, performance metrics, memory usage plots, strategy comparison charts
 
 ### 2. Model Evaluation Script
 
