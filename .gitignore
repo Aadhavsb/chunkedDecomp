@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# PyTorch
+*.pth
+*.pt
+checkpoints/
+wandb/
+
+# Data and Results
+data/processed/
+results/experiments/
+*.log
+*.out
+*.err
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# HPC specific
+slurm-*.out
+slurm-*.err
+core.*

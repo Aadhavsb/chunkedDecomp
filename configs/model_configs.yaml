@@ -1,0 +1,38 @@
+# Model Configuration for ChunkedDecomp
+
+# Default model settings
+default_model:
+  name: "gpt2"
+  max_length: 512
+  device: "auto"  # auto, cpu, cuda
+  torch_dtype: "auto"  # auto, float32, float16, bfloat16
+
+# Model variants for experimentation
+models:
+  gpt2_small:
+    name: "gpt2"
+    max_length: 512
+    description: "GPT-2 small (124M parameters)"
+  
+  gpt2_medium:
+    name: "gpt2-medium"
+    max_length: 1024
+    description: "GPT-2 medium (355M parameters)"
+  
+  gpt2_large:
+    name: "gpt2-large"
+    max_length: 1024
+    description: "GPT-2 large (774M parameters)"
+  
+  dialogpt_medium:
+    name: "microsoft/DialoGPT-medium"
+    max_length: 512
+    description: "DialoGPT medium for conversational AI"
+
+# Generation settings
+generation:
+  do_sample: true
+  temperature: 0.7
+  top_p: 0.9
+  max_new_tokens: 100
+  pad_token_id: 50256
